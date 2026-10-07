@@ -1,0 +1,5 @@
+# DP832 GUI Modern - Python 依赖
+# 安装： pip install -r requirements.txt
+PySide6>=6.5
+pyqtgraph>=0.13
+pyvisa>=1.13
