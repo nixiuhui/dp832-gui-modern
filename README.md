@@ -28,9 +28,7 @@
 
 新版为深色主题的卡片式布局：顶部为连接工具栏与右侧 `+` 增列按钮，主体为 1~3 个通道卡片，每张卡片包含通道选择、大字体电压/电流、设定区（电压/限流/OCP）、功率历程曲线与输出开关。
 
-> 下图为**原版**界面（旧），仅作历史参考：
->
-> ![原版界面](example-pi.png)
+![新版界面](assets/screenshot.png)
 
 ---
 
@@ -120,7 +118,8 @@ dp832-gui-modern/
 ├── 调试启动(显示错误).bat    # 带控制台启动（便于排错）
 ├── make_shortcut.ps1       # 生成桌面快捷方式（辅助脚本）
 ├── requirements.txt        # Python 依赖
-├── example-pi.png          # 原版界面截图（历史参考）
+├── assets/
+│   └── screenshot.png      # 新版界面截图
 ├── LICENSE                 # MIT 许可证
 └── README.md
 ```
