@@ -6,8 +6,6 @@
 #
 
 import sys
-import math
-import random
 
 from PySide6.QtCore import *
 from PySide6.QtGui import *
@@ -294,10 +292,6 @@ class ChannelCard(QFrame):
 		self.points = 600
 		self.pdata = [0.0] * self.points
 		self.output_on = False
-		# 演示模式下的模拟基准值
-		self._sim_v = 5.0 * (index + 1)
-		self._sim_i = 0.2 * (index + 1)
-		self._sim_phase = random.uniform(0, math.pi * 2)
 
 		root = QVBoxLayout(self)
 		root.setContentsMargins(16, 14, 16, 16)
@@ -503,23 +497,6 @@ class ChannelCard(QFrame):
 			self.pdata.pop(0)
 		self.curve.setData(self.pdata)
 
-	def simulateReading(self):
-		"""演示模式下生成模拟读数（以设定电压/限流为基准，并模拟恒流钳位）"""
-		self._sim_phase += 0.12
-		vset = self.setV.value()
-		iset = self.setI.value()
-		v = vset + math.sin(self._sim_phase) * vset * 0.01 + random.uniform(-0.02, 0.02)
-		if v < 0:
-			v = 0.0
-		# 负载电流在限流值上下波动，超过限流值时被恒流钳位
-		i = iset * (0.7 + 0.4 * abs(math.sin(self._sim_phase * 0.4))) + random.uniform(-0.005, 0.005)
-		if i < 0:
-			i = 0.0
-		if i > iset:
-			i = iset
-		p = v * i
-		return v, i, p
-
 
 # ----------------------------------------------------------------------------
 # 主窗口
@@ -562,6 +539,9 @@ class DP832GUI(QMainWindow):
 		self.resize(1000, 680)
 		self._refreshAddButton()
 
+		# 启动即连接仪器并读取状态（连接失败时仅状态栏提示，不弹窗）
+		self.tryConnect(show_error=False)
+
 	# ------------------------- 顶部工具栏 -------------------------
 	def _buildTopBar(self, constr):
 		bar = QFrame()
@@ -590,18 +570,13 @@ class DP832GUI(QMainWindow):
 
 		self.connectBtn = QPushButton("连接")
 		self.connectBtn.setObjectName("connectBtn")
-		self.connectBtn.clicked.connect(self.tryConnect)
+		self.connectBtn.clicked.connect(lambda: self.tryConnect())
 		lay.addWidget(self.connectBtn)
 
 		self.disconnectBtn = QPushButton("断开")
 		self.disconnectBtn.clicked.connect(self.dis)
 		self.disconnectBtn.setEnabled(False)
 		lay.addWidget(self.disconnectBtn)
-
-		self.demoCheck = QCheckBox("演示模式")
-		self.demoCheck.setToolTip("无需连接设备，使用模拟数据预览界面")
-		self.demoCheck.setChecked(True)
-		lay.addWidget(self.demoCheck)
 
 		self.statusLbl = QLabel("未连接")
 		self.statusLbl.setObjectName("statusErr")
@@ -653,20 +628,9 @@ class DP832GUI(QMainWindow):
 			c.setRemoveEnabled(len(self.cards) > 1)
 
 	# ------------------------- 连接 / 通信 -------------------------
-	def tryConnect(self):
+	def tryConnect(self, show_error=True):
 		constr = self.constr.text()
 		QSettings().setValue('constring', constr)
-
-		if self.demoCheck.isChecked():
-			# 演示模式：无需真实设备
-			self.connected = True
-			self.inst = None
-			self._setStatus("演示模式运行中", True)
-			self.connectBtn.setEnabled(False)
-			self.disconnectBtn.setEnabled(True)
-			self.constr.setEnabled(False)
-			self._startTimer()
-			return
 
 		try:
 			self.inst = DP832()
@@ -679,7 +643,8 @@ class DP832GUI(QMainWindow):
 			self._startTimer()
 		except Exception as e:
 			self._setStatus("连接失败: %s" % e, False)
-			QMessageBox.critical(self, "连接失败", str(e))
+			if show_error:
+				QMessageBox.critical(self, "连接失败", str(e))
 			self.inst = None
 			self.connected = False
 
@@ -730,55 +695,48 @@ class DP832GUI(QMainWindow):
 
 	def applyVoltage(self, card, volts):
 		"""设定输出电压（如 24V）"""
-		if self.inst is not None:
-			try:
-				self.inst.set_voltage(volts, card.channel)
-				self._setStatus("已设定 %s 电压 %.3fV" % (card.channel, volts), True)
-			except Exception as e:
-				self._setStatus("设定电压失败", False)
-		else:
-			self._setStatus("演示：设定 %s 电压 %.3fV" % (card.channel, volts), True)
+		if self.inst is None:
+			self._setStatus("未连接，无法设定电压", False)
+			return
+		try:
+			self.inst.set_voltage(volts, card.channel)
+			self._setStatus("已设定 %s 电压 %.3fV" % (card.channel, volts), True)
+		except Exception as e:
+			self._setStatus("设定电压失败", False)
 
 	def applyCurrent(self, card, amps):
 		"""设定恒流限流值（如 0.2A）"""
-		if self.inst is not None:
-			try:
-				self.inst.set_current(amps, card.channel)
-				self._setStatus("已设定 %s 限流 %.3fA" % (card.channel, amps), True)
-			except Exception as e:
-				self._setStatus("设定限流失败", False)
-		else:
-			self._setStatus("演示：设定 %s 限流 %.3fA" % (card.channel, amps), True)
+		if self.inst is None:
+			self._setStatus("未连接，无法设定限流", False)
+			return
+		try:
+			self.inst.set_current(amps, card.channel)
+			self._setStatus("已设定 %s 限流 %.3fA" % (card.channel, amps), True)
+		except Exception as e:
+			self._setStatus("设定限流失败", False)
 
 	def applyOcp(self, card, enabled, level):
 		"""开/关过流保护 OCP，阈值取限流值；超限即切断输出"""
-		if self.inst is not None:
-			try:
-				self.inst.set_ocp(enabled, level, card.channel)
-				self._setStatus(
-					"%s 过流保护已%s（%.3fA）" % (card.channel, "开启" if enabled else "关闭", level),
-					True,
-				)
-			except Exception as e:
-				self._setStatus("设定 OCP 失败", False)
-		else:
+		if self.inst is None:
+			self._setStatus("未连接，无法设定过流保护", False)
+			return
+		try:
+			self.inst.set_ocp(enabled, level, card.channel)
 			self._setStatus(
-				"演示：%s 过流保护%s" % (card.channel, "开启" if enabled else "关闭"),
+				"%s 过流保护已%s（%.3fA）" % (card.channel, "开启" if enabled else "关闭", level),
 				True,
 			)
+		except Exception as e:
+			self._setStatus("设定 OCP 失败", False)
 
 	# ------------------------- 数据刷新 -------------------------
 	def updateReadings(self):
-		if not self.connected:
+		if not self.connected or self.inst is None:
 			return
 		for card in self.cards:
 			try:
-				if self.inst is not None:
-					r = self.inst.readings(card.channel)
-					v, i, p = r["v"], r["i"], r["p"]
-				else:
-					v, i, p = card.simulateReading()
-				card.updateReading(v, i, p)
+				r = self.inst.readings(card.channel)
+				card.updateReading(r["v"], r["i"], r["p"])
 			except Exception:
 				# 单通道读取失败不影响其它通道
 				pass
