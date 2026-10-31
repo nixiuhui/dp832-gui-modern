@@ -328,8 +328,14 @@ class ChannelCard(QFrame):
 		metrics.addWidget(self.currBox, 1)
 		root.addLayout(metrics)
 
-		# --- 设定区：输出电压 / 限流 / 过流保护 ---
-		root.addWidget(self._buildSettingBox())
+		# --- 设定区（左半） + 功率大字显示（右半） ---
+		mid = QHBoxLayout()
+		mid.setSpacing(12)
+		mid.addWidget(self._buildSettingBox(), 1)
+		self.powerBox = MetricBox("功率 POWER", COLOR_POWER, "W")
+		# 顶部对齐：高度与上方电压/电流框一致，不随设定框拉伸
+		mid.addWidget(self.powerBox, 1, Qt.AlignTop)
+		root.addLayout(mid)
 
 		# --- 功率曲线 ---
 		power_header = QHBoxLayout()
@@ -436,7 +442,7 @@ class ChannelCard(QFrame):
 		lay.addLayout(irow)
 
 		# 过流保护 OCP
-		self.ocpCheck = QCheckBox("过流保护 OCP（电流超限即切断输出）")
+		self.ocpCheck = QCheckBox("过流保护 OCP")
 		self.ocpCheck.setToolTip(
 			"开启后以“限流值”作为过流阈值，一旦超过则切断输出。\n"
 			"仅“限流值”为恒流钳位（不切断），两者配合可完整实现限流+过流保护。"
@@ -490,6 +496,7 @@ class ChannelCard(QFrame):
 		"""刷新大字体数值与功率曲线"""
 		self.voltBox.setValue("%.3f" % v)
 		self.currBox.setValue("%.4f" % i)
+		self.powerBox.setValue("%.3f" % p)
 		self.powerValue.setText("%.3f W" % p)
 
 		self.pdata.append(p)
@@ -523,14 +530,15 @@ class DP832GUI(QMainWindow):
 		outer.setContentsMargins(0, 0, 0, 0)
 		outer.setSpacing(0)
 
-		outer.addWidget(self._buildTopBar(constr))
+		self.topBar = self._buildTopBar(constr)
 
-		# 卡片容器
+		# 卡片容器（顶部栏与卡片处于同一网格，保证宽度一致）
 		self.cardsHost = QWidget()
-		self.cardsLayout = QHBoxLayout(self.cardsHost)
-		self.cardsLayout.setContentsMargins(14, 14, 14, 14)
-		self.cardsLayout.setSpacing(14)
-		self.cardsLayout.addStretch()
+		self.cardsGrid = QGridLayout(self.cardsHost)
+		self.cardsGrid.setContentsMargins(14, 14, 14, 14)
+		self.cardsGrid.setHorizontalSpacing(14)
+		self.cardsGrid.setVerticalSpacing(14)
+		self.cardsGrid.setRowStretch(1, 1)
 		outer.addWidget(self.cardsHost, 1)
 
 		self.cards = []
@@ -542,14 +550,29 @@ class DP832GUI(QMainWindow):
 		# 启动即连接仪器并读取状态（连接失败时仅状态栏提示，不弹窗）
 		self.tryConnect(show_error=False)
 
+	def showEvent(self, event):
+		super().showEvent(event)
+		# 显示后按卡片实际宽度收缩窗口，使 GUI 整体宽度与通道卡片一致
+		if not getattr(self, "_widthAdjusted", False):
+			self._widthAdjusted = True
+			QTimer.singleShot(0, self._fitWidthToCards)
+
+	def _fitWidthToCards(self):
+		# 用卡片自然宽度（sizeHint）计算，避免当前窗口过宽时卡片已被拉伸
+		m = self.cardsGrid.contentsMargins()
+		sp = self.cardsGrid.horizontalSpacing()
+		w = self.cards[0].sizeHint().width() + m.left() + m.right()
+		w += sp * (len(self.cards) - 1)
+		self.resize(w, self.height())
+
 	# ------------------------- 顶部工具栏 -------------------------
 	def _buildTopBar(self, constr):
 		bar = QFrame()
 		bar.setObjectName("topBar")
-		bar.setFixedHeight(66)
+		bar.setFixedHeight(56)
 		lay = QHBoxLayout(bar)
-		lay.setContentsMargins(16, 10, 16, 10)
-		lay.setSpacing(10)
+		lay.setContentsMargins(14, 8, 14, 8)
+		lay.setSpacing(8)
 
 		titleBox = QVBoxLayout()
 		titleBox.setSpacing(0)
@@ -561,12 +584,9 @@ class DP832GUI(QMainWindow):
 		titleBox.addWidget(s)
 		lay.addLayout(titleBox)
 
-		lay.addSpacing(20)
-
-		lay.addWidget(QLabel("连接地址"))
 		self.constr = QLineEdit(constr)
 		self.constr.setMinimumWidth(320)
-		lay.addWidget(self.constr)
+		lay.addWidget(self.constr, 1)
 
 		self.connectBtn = QPushButton("连接")
 		self.connectBtn.setObjectName("connectBtn")
@@ -581,8 +601,6 @@ class DP832GUI(QMainWindow):
 		self.statusLbl = QLabel("未连接")
 		self.statusLbl.setObjectName("statusErr")
 		lay.addWidget(self.statusLbl)
-
-		lay.addStretch()
 
 		self.addBtn = QPushButton("+")
 		self.addBtn.setObjectName("addBtn")
@@ -599,9 +617,9 @@ class DP832GUI(QMainWindow):
 		idx = len(self.cards)
 		card = ChannelCard(idx)
 		card.removeRequested.connect(self.removeChannelCard)
-		# 插入到末尾 stretch 之前
-		self.cardsLayout.insertWidget(self.cardsLayout.count() - 1, card)
+		self.cardsGrid.addWidget(card, 1, idx)
 		self.cards.append(card)
+		self._refreshTopBarSpan()
 		self._refreshAddButton()
 
 	def removeChannelCard(self, card):
@@ -609,13 +627,20 @@ class DP832GUI(QMainWindow):
 			return
 		if card in self.cards:
 			self.cards.remove(card)
-			self.cardsLayout.removeWidget(card)
+			self.cardsGrid.removeWidget(card)
 			card.deleteLater()
 		# 重新排布索引与默认通道
 		for i, c in enumerate(self.cards):
 			c.index = i
 			c.title.setText("通道 %d" % (i + 1))
+			self.cardsGrid.addWidget(c, 1, i)
+		self._refreshTopBarSpan()
 		self._refreshAddButton()
+
+	def _refreshTopBarSpan(self):
+		"""顶部栏横跨所有卡片列，使宽度与卡片区域一致"""
+		n = max(1, len(self.cards))
+		self.cardsGrid.addWidget(self.topBar, 0, 0, 1, n)
 
 	def _refreshAddButton(self):
 		full = len(self.cards) >= MAX_COLUMNS
